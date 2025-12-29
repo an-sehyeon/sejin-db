@@ -1,0 +1,154 @@
+-- [인덱스 / 유니크 / 체크]
+-- - FK는 안 써도 “중복 방지”랑 “조회 성능”은 꼭 챙겨야 함
+-- - CHECK는 MySQL 8에서 동작(버전 낮으면 무시될 수 있음)
+-- =====================================================================================
+
+-- USER
+ALTER TABLE `USER`
+  ADD UNIQUE KEY `UK_USER_EMAIL` (`email`),
+  ADD KEY `IDX_USER_ROLE` (`role`),
+  ADD KEY `IDX_USER_IS_DELETED` (`is_deleted`);
+
+-- CUSTOMER
+ALTER TABLE `CUSTOMER`
+  ADD KEY `IDX_CUSTOMER_PHONE` (`phone`),
+  ADD KEY `IDX_CUSTOMER_TYPE` (`type`),
+  ADD KEY `IDX_CUSTOMER_IS_DELETED` (`is_deleted`);
+
+-- DELIVERY_ZONE
+ALTER TABLE `DELIVERY_ZONE`
+  ADD UNIQUE KEY `UK_DELIVERY_ZONE_CODE` (`code`);
+
+-- PRODUCT
+ALTER TABLE `PRODUCT`
+  ADD UNIQUE KEY `UK_PRODUCT_TYPE_NAME` (`type`, `name`);
+
+-- PRICE_RULE
+ALTER TABLE `PRICE_RULE`
+  ADD KEY `IDX_PRICE_RULE_LOOKUP` (`delivery_zone_id`, `product_id`, `year`, `channel`, `is_active`);
+
+-- STOCK
+ALTER TABLE `STOCK`
+  ADD UNIQUE KEY `UK_STOCK_PRODUCT` (`product_id`);
+
+-- NH_FILE
+ALTER TABLE `NH_FILE`
+  ADD KEY `IDX_NH_FILE_UPLOADED` (`uploaded_id`),
+  ADD KEY `IDX_NH_FILE_YEAR` (`upload_year`),
+  ADD KEY `IDX_NH_FILE_STATUS` (`status`);
+
+-- NH_ROW
+ALTER TABLE `NH_ROW`
+  ADD KEY `IDX_NH_ROW_FILE` (`nh_file_id`),
+  ADD KEY `IDX_NH_ROW_STATUS` (`parse_status`),
+  ADD KEY `IDX_NH_ROW_ORDER` (`order_id`);
+
+-- ADDRESS
+ALTER TABLE `ADDRESS`
+  ADD KEY `IDX_ADDRESS_CUSTOMER` (`customer_id`),
+  ADD KEY `IDX_ADDRESS_ZONE` (`delivery_zone_id`),
+  ADD KEY `IDX_ADDRESS_IS_DELETED` (`is_deleted`);
+
+-- ORDER_HEADER
+ALTER TABLE `ORDER_HEADER`
+  ADD UNIQUE KEY `UK_ORDER_HEADER_CODE` (`code`),
+  ADD KEY `IDX_ORDER_HEADER_SOURCE` (`source`),
+  ADD KEY `IDX_ORDER_HEADER_DATE` (`order_date`),
+  ADD KEY `IDX_ORDER_HEADER_MONTH` (`month`),
+  ADD KEY `IDX_ORDER_HEADER_CUSTOMER` (`customer_id`),
+  ADD KEY `IDX_ORDER_HEADER_ADDRESS` (`address_id`),
+  ADD KEY `IDX_ORDER_HEADER_PAYMENT_STATUS` (`payment_status`),
+  ADD KEY `IDX_ORDER_HEADER_STATUS` (`status`),
+  ADD KEY `IDX_ORDER_HEADER_NH_ROW` (`nh_row_id`);
+
+-- ORDER_ITEM
+ALTER TABLE `ORDER_ITEM`
+  ADD KEY `IDX_ORDER_ITEM_ORDER` (`order_id`),
+  ADD KEY `IDX_ORDER_ITEM_PRODUCT` (`product_id`),
+  ADD KEY `IDX_ORDER_ITEM_RULE` (`rule_id`);
+
+-- PAYMENT_STATUS_HISTORY
+ALTER TABLE `PAYMENT_STATUS_HISTORY`
+  ADD KEY `IDX_PSH_ORDER_CHANGED` (`order_id`, `changed_at`),
+  ADD KEY `IDX_PSH_CHANGED_BY` (`changed_by`);
+
+-- DELIVERY
+ALTER TABLE `DELIVERY`
+  ADD KEY `IDX_DELIVERY_ORDER` (`order_id`),
+  ADD KEY `IDX_DELIVERY_ADDRESS` (`address_id`),
+  ADD KEY `IDX_DELIVERY_DRIVER` (`user_id`),
+  ADD KEY `IDX_DELIVERY_DATE_PLAN` (`date_plan`),
+  ADD KEY `IDX_DELIVERY_STATUS` (`status`),
+  ADD KEY `IDX_DELIVERY_MONTH` (`month`);
+
+-- DELIVERY_STATUS_HISTORY
+ALTER TABLE `DELIVERY_STATUS_HISTORY`
+  ADD KEY `IDX_DSH_DELIVERY_CHANGED` (`delivery_id`, `changed_at`),
+  ADD KEY `IDX_DSH_CHANGED_BY` (`changed_by`);
+
+-- DELIVERY_GROUP
+ALTER TABLE `DELIVERY_GROUP`
+  ADD KEY `IDX_DG_DRIVER_DATE` (`user_id`, `date`),
+  ADD KEY `IDX_DG_STATUS` (`status`);
+
+-- DELIVERY_GROUP_ITEM
+ALTER TABLE `DELIVERY_GROUP_ITEM`
+  ADD UNIQUE KEY `UK_DGI_GROUP_DELIVERY` (`group_id`, `delivery_id`),
+  ADD KEY `IDX_DGI_GROUP_SEQ` (`group_id`, `seq`);
+
+-- DELIVERY_PHOTO
+ALTER TABLE `DELIVERY_PHOTO`
+  ADD KEY `IDX_DP_DELIVERY` (`delivery_id`),
+  ADD KEY `IDX_DP_USER` (`user_id`),
+  ADD KEY `IDX_DP_SHOT_AT` (`shot_at`);
+
+-- PROD_LOG
+ALTER TABLE `PROD_LOG`
+  ADD KEY `IDX_PL_PRODUCT_DATE` (`product_id`, `date`),
+  ADD KEY `IDX_PL_USER_DATE` (`user_id`, `date`),
+  ADD KEY `IDX_PL_TYPE` (`type`);
+
+-- ISSUE
+ALTER TABLE `ISSUE`
+  ADD KEY `IDX_ISSUE_USER` (`user_id`),
+  ADD KEY `IDX_ISSUE_TYPE` (`type`),
+  ADD KEY `IDX_ISSUE_STATUS` (`status`),
+  ADD KEY `IDX_ISSUE_DELIVERY` (`delivery_id`),
+  ADD KEY `IDX_ISSUE_PROD_LOG` (`prod_log_id`),
+  ADD KEY `IDX_ISSUE_ADMIN_NOTICE` (`admin_notice`);
+
+-- NOTIFICATION
+ALTER TABLE `NOTIFICATION`
+  ADD KEY `IDX_NOTI_TYPE_CREATED` (`type`, `created_at`),
+  ADD KEY `IDX_NOTI_REF` (`ref_id`),
+  ADD KEY `IDX_NOTI_IS_DELETED` (`is_deleted`);
+
+-- NOTIFICATION_USER
+ALTER TABLE `NOTIFICATION_USER`
+  ADD UNIQUE KEY `UK_NU_NOTI_USER` (`notification_id`, `user_id`),
+  ADD KEY `IDX_NU_USER_READ` (`user_id`, `is_read`),
+  ADD KEY `IDX_NU_NOTI` (`notification_id`);
+
+
+-- CHECK (최소한으로만 걸어둠)
+-- - FK 없으면 “값 자체”가 막 들어오는 경우가 있어서, 여기서 1차로 방어하는 느낌
+ALTER TABLE `USER`
+  ADD CONSTRAINT `CHK_USER_ROLE` CHECK (`role` IN ('ADMIN','DRIVER','EMP','GUEST')),
+  ADD CONSTRAINT `CHK_USER_IS_DELETED` CHECK (`is_deleted` IN (0,1));
+
+ALTER TABLE `ORDER_HEADER`
+  ADD CONSTRAINT `CHK_ORDER_STATUS` CHECK (`status` IN ('NEW','HOLD','CANCEL','DONE')),
+  ADD CONSTRAINT `CHK_ORDER_PAYMENT_STATUS` CHECK (`payment_status` IN ('UNPAID','PAID','PARTIAL','REFUNDED','CANCELED'));
+
+ALTER TABLE `DELIVERY`
+  ADD CONSTRAINT `CHK_DELIVERY_STATUS` CHECK (`status` IN ('READY','ASSIGNED','GOING','DONE','FAIL','CLAIM'));
+
+ALTER TABLE `ISSUE`
+  ADD CONSTRAINT `CHK_ISSUE_STATUS` CHECK (`status` IN ('OPEN','DOING','DONE'));
+
+ALTER TABLE `NOTIFICATION_USER`
+  ADD CONSTRAINT `CHK_NU_IS_READ` CHECK (`is_read` IN (0,1)),
+  ADD CONSTRAINT `CHK_NU_IS_DELETED` CHECK (`is_deleted` IN (0,1));
+
+
+
