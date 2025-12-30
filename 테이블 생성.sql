@@ -1,18 +1,21 @@
--- [세진 프로젝트] 
--- - 포인트 : FK는 안 걸고(삭제/운영 복잡도 줄이려고), 필요한 건 트리거/인덱스/규칙으로 보완하는 방식
+-- [세진 프로젝트]
+-- - 포인트 : FK는 안 걸고(삭제/운영 복잡도 줄이려고), 필요한 건 인덱스/유니크/체크 + 서버 규칙으로 보완하는 방식
+-- - 트리거는 안 씀(상태이력/재고반영/알림생성 같은 건 서버 서비스(@Transactional)에서 처리)
 
 SET NAMES utf8mb4;
 SET time_zone = '+09:00';
 
+
 -- [TABLE 생성]
--- - FK는 안 씀 (ALTER TABLE ... FOREIGN KEY 부분은 전부 제거)
--- - 대신 PK/AUTO_INCREMENT는 CREATE TABLE 안에서 바로 정의
--- - soft delete(삭제표시) 컬럼 있는 테이블은 “실제 삭제”보단 is_deleted/deleted_at으로 처리하는 걸 기본으로 봄
+-- - PK/AUTO_INCREMENT는 CREATE TABLE 안에서 바로 정의
+-- - FK는 안 걸지만, *_id 컬럼은 “논리적 연결” 용도로 계속 유지(서버에서 존재여부 확인하고 넣는 방식)
+-- - created_at / updated_at 같은 건 DB 기본값으로 자동 처리됨
 
 
 -- [USER] 사용자(관리자/기사/직원/게스트) 계정 테이블
--- - 로그인/권한(ROLE) 기반으로 관리자 웹, 기사 앱, 직원 웹 등을 구분
--- - 소프트 삭제: is_deleted + deleted_at
+-- - 로그인/권한(ROLE) 기반으로 관리자, 기사, 직원, 게스트 등을 구분
+-- - 소프트 삭제: is_deleted + deleted_at (탈퇴해도 row는 남기고 상태만 바꾸는 방식)
+-- - 주민번호는 원본 저장 안 하고, “앞6 + 뒤2(총 8자리)”만 서버에서 해시로 만들어 저장(비교용)
 CREATE TABLE IF NOT EXISTS `USER` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `email` VARCHAR(100) NOT NULL COMMENT '로그인 ID(이메일)',
@@ -20,7 +23,7 @@ CREATE TABLE IF NOT EXISTS `USER` (
   `name` VARCHAR(50) NOT NULL COMMENT '사용자 이름',
   `phone` VARCHAR(20) NOT NULL COMMENT '전화번호',
   `role` VARCHAR(20) NOT NULL COMMENT 'ADMIN/DRIVER/EMP/GUEST',
-  `registration_number` VARCHAR(20) NOT NULL COMMENT '사번/등록번호 등 내부 식별용',
+  `registration8_hash` CHAR(64) NOT NULL COMMENT '주민번호 앞6+뒤2(8자리) 해시값(원본 저장 X, 비교용)',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `deleted_at` DATETIME NULL DEFAULT NULL,
@@ -29,9 +32,11 @@ CREATE TABLE IF NOT EXISTS `USER` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='사용자';
 
 
+
 -- [CUSTOMER] 고객 테이블(농협/직접주문 공통)
--- - 고객 자체 정보만 들고, 실제 배송지는 ADDRESS에서 관리
--- - 고객 특이사항은 memo에 남겨두는 용도
+-- - 고객 “기본 정보”만 관리(이름/연락처/구분)
+-- - 배송지는 ADDRESS에서 관리(고객 1명당 배송지 여러 개 가능)
+-- - 고객 특이사항은 memo에 적어두는 용도
 CREATE TABLE IF NOT EXISTS `CUSTOMER` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `name` VARCHAR(50) NOT NULL,
@@ -46,9 +51,10 @@ CREATE TABLE IF NOT EXISTS `CUSTOMER` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='고객';
 
 
+
 -- [DELIVERY_ZONE] 배송 권역 테이블
 -- - 영천시 내/외 같은 권역 관리용
--- - 단가정책(PRICE_RULE) + 주소(ADDRESS)에서 같이 씀
+-- - 주소(ADDRESS)랑 단가정책(PRICE_RULE)에서 같이 참조해서 씀
 CREATE TABLE IF NOT EXISTS `DELIVERY_ZONE` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `code` VARCHAR(30) NOT NULL COMMENT 'YC_IN:영천시 내, YC_OUT:영천시 외',
@@ -60,9 +66,10 @@ CREATE TABLE IF NOT EXISTS `DELIVERY_ZONE` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='배송 권역';
 
 
+
 -- [PRODUCT] 상품 테이블
 -- - 실제 상품 마스터(퇴비/유박)
--- - 이거 기준으로 재고(STOCK), 단가정책(PRICE_RULE), 주문품목(ORDER_ITEM)이 붙음
+-- - 이 테이블을 기준으로 재고(STOCK), 단가정책(PRICE_RULE), 주문품목(ORDER_ITEM)이 붙는 구조
 CREATE TABLE IF NOT EXISTS `PRODUCT` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `type` VARCHAR(20) NOT NULL COMMENT '퇴비:COMPOST, 유박:UBAK',
@@ -75,9 +82,11 @@ CREATE TABLE IF NOT EXISTS `PRODUCT` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='상품';
 
 
+
 -- [PRICE_RULE] 단가 정책 테이블
 -- - 권역 + 상품 + 연도 + 채널(NH/CALL) 기준으로 가격 정책을 저장
--- - 주문 생성할 때 이 정책을 찾아서 “주문 당시 단가”를 ORDER_ITEM에 복사(스냅샷)하는 구조
+-- - 주문 생성 시 서버에서 이 정책을 찾아서 “주문 당시 단가”를 ORDER_ITEM에 복사(스냅샷)해서 저장
+--   (정책이 나중에 바뀌어도 기존 주문 금액은 그대로 남게 하려고)
 CREATE TABLE IF NOT EXISTS `PRICE_RULE` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `delivery_zone_id` BIGINT UNSIGNED NOT NULL,
@@ -96,9 +105,11 @@ CREATE TABLE IF NOT EXISTS `PRICE_RULE` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='단가 정책';
 
 
+
 -- [STOCK] 재고 테이블(현재 재고 스냅샷)
--- - product_id 당 1줄만 유지하는 방식(그래서 유니크 걸어둠)
--- - 실제 변동 이력은 PROD_LOG에 쌓고, PROD_LOG 입력 시 트리거로 STOCK.qty 반영
+-- - product_id 당 1줄만 유지하는 구조(그래서 유니크를 걸어서 1:1로 유지)
+-- - 재고 수량(qty)은 서버에서 PROD_LOG(재고 변동 원장) 등록/수정 시 같이 반영하는 방식
+--   (즉, “재고는 로그 기반으로만 움직인다” 규칙을 서버에서 강제)
 CREATE TABLE IF NOT EXISTS `STOCK` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `product_id` BIGINT UNSIGNED NOT NULL,
@@ -110,9 +121,10 @@ CREATE TABLE IF NOT EXISTS `STOCK` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='재고';
 
 
+
 -- [NH_FILE] 농협 파일 업로드 이력
 -- - 농협 엑셀 업로드 한 건 = 여기 1건
--- - 파싱 결과(행 단위)는 NH_ROW로 저장
+-- - 파싱 결과(행 단위)는 NH_ROW에 저장
 CREATE TABLE IF NOT EXISTS `NH_FILE` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `uploaded_id` BIGINT UNSIGNED NOT NULL COMMENT '업로드한 사용자 ID',
@@ -130,9 +142,11 @@ CREATE TABLE IF NOT EXISTS `NH_FILE` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='농협 파일 업로드';
 
 
+
 -- [NH_ROW] 농협 파일 파싱 결과(엑셀 한 줄 = 여기 한 줄)
 -- - 파싱 성공/실패를 parse_status로 구분
--- - 주문으로 변환되면 order_id에 매핑(실패면 err_msg에 이유)
+-- - 주문으로 변환되면 order_id에 매핑(실패면 err_msg에 이유 저장)
+-- - order_id는 FK는 아니고 “변환 결과 연결”용으로만 들고 있는 컬럼(서버에서 값 채움)
 CREATE TABLE IF NOT EXISTS `NH_ROW` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `nh_file_id` BIGINT UNSIGNED NOT NULL,
@@ -159,6 +173,7 @@ CREATE TABLE IF NOT EXISTS `NH_ROW` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='농협 행 파싱 결과';
 
 
+
 -- [ADDRESS] 배송지 테이블
 -- - customer_id(고객) 1명당 배송지가 여러 개 가능해서 분리
 -- - delivery_zone_id로 권역 연결(단가/루트 필터에 쓰려고)
@@ -182,10 +197,12 @@ CREATE TABLE IF NOT EXISTS `ADDRESS` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='배송지';
 
 
+
 -- [ORDER_HEADER] 주문 헤더(주문 1건)
 -- - 사람이 보기 쉬운 주문번호(code) 저장
--- - 농협 주문이면 nh_row_id로 “원본행”만 연결해 둠(필요할 때 추적하려고)
--- - 결제상태(payment_status) 변경은 이력(PAYMENT_STATUS_HISTORY)을 꼭 남겨야 해서 트리거로 자동 기록
+-- - 농협 주문이면 nh_row_id로 “원본행(NH_ROW)”만 연결해 둠(필요할 때 추적하려고)
+-- - 결제상태(payment_status) 변경 시 이력(PAYMENT_STATUS_HISTORY)은 서버에서 같이 insert하는 규칙
+--   (DB 트리거로 자동 처리 안 하고, 서비스 메소드에서 트랜잭션으로 묶어서 처리)
 CREATE TABLE IF NOT EXISTS `ORDER_HEADER` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `code` VARCHAR(50) NOT NULL COMMENT '사람이 보기 쉬운 주문번호',
@@ -201,7 +218,7 @@ CREATE TABLE IF NOT EXISTS `ORDER_HEADER` (
   `payment_memo` VARCHAR(255) NULL DEFAULT NULL COMMENT '입금자명/확인/특이사항',
   `status` VARCHAR(20) NOT NULL DEFAULT 'NEW' COMMENT '주문 상태: NEW/HOLD/CANCEL 등',
   `payment_status` VARCHAR(20) NOT NULL DEFAULT 'UNPAID' COMMENT '결제 상태: UNPAID/PAID/PARTIAL/REFUNDED/CANCELED',
-  `paid_at` DATETIME NULL DEFAULT NULL COMMENT '결제 완료로 변경된 시각',
+  `paid_at` DATETIME NULL DEFAULT NULL COMMENT '결제 완료로 변경된 시각(서버에서 세팅)',
   `memo` VARCHAR(255) NULL DEFAULT NULL COMMENT '주문 관련 메모',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -210,9 +227,11 @@ CREATE TABLE IF NOT EXISTS `ORDER_HEADER` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='주문 헤더';
 
 
+
 -- [ORDER_ITEM] 주문 품목(주문 1건에 여러 줄)
 -- - unit_base/unit_sale은 “주문 시점 단가”를 저장(정책 바뀌어도 기존 주문 금액 유지하려고)
 -- - rule_id는 직원이 단가 수기로 넣는 케이스 대비해서 NULL 허용
+-- - price_base/price_sale은 서버에서 계산해서 넣는 값(조회/정산 편하게 하려고 미리 저장)
 CREATE TABLE IF NOT EXISTS `ORDER_ITEM` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `order_id` BIGINT UNSIGNED NOT NULL,
@@ -233,9 +252,10 @@ CREATE TABLE IF NOT EXISTS `ORDER_ITEM` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='주문 품목';
 
 
+
 -- [PAYMENT_STATUS_HISTORY] 결제 상태 변경 이력
 -- - 결제상태는 정산/분쟁이랑 직결돼서 “누가 언제 바꿨는지” 반드시 남기는 용도
--- - ORDER_HEADER.payment_status 업데이트 시 트리거로 자동 insert 되게 구성
+-- - ORDER_HEADER.payment_status 변경 시 서버에서 이 테이블에 insert하는 규칙(트리거 X)
 CREATE TABLE IF NOT EXISTS `PAYMENT_STATUS_HISTORY` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `order_id` BIGINT UNSIGNED NOT NULL,
@@ -249,10 +269,12 @@ CREATE TABLE IF NOT EXISTS `PAYMENT_STATUS_HISTORY` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='결제 상태 이력';
 
 
+
 -- [DELIVERY] 배송(배달) 테이블
 -- - 주문(order_id)을 실제 배달 단위로 관리
 -- - user_id는 배차 전에는 NULL(미배차)
--- - 배송 상태(status) 변경은 이력(DELIVERY_STATUS_HISTORY)으로 남기려고 트리거로 자동 기록
+-- - 배송 상태(status) 변경 이력은 DELIVERY_STATUS_HISTORY에 서버에서 같이 insert하는 규칙
+-- - last_at은 “최근 상태 변경 시각”이라 서버에서 status 바꿀 때 같이 세팅
 CREATE TABLE IF NOT EXISTS `DELIVERY` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `order_id` BIGINT UNSIGNED NOT NULL,
@@ -262,7 +284,7 @@ CREATE TABLE IF NOT EXISTS `DELIVERY` (
   `status` VARCHAR(20) NOT NULL DEFAULT 'READY' COMMENT 'READY/ASSIGNED/GOING/DONE/FAIL/CLAIM',
   `qty_total` INT NOT NULL DEFAULT 0 COMMENT '이 배달에서 내려야 할 전체 포 수',
   `month` TINYINT UNSIGNED NULL DEFAULT NULL COMMENT '필터용 공급월',
-  `last_at` DATETIME NULL DEFAULT NULL COMMENT '최근 상태 변경 시각',
+  `last_at` DATETIME NULL DEFAULT NULL COMMENT '최근 상태 변경 시각(서버에서 세팅)',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `deleted_at` DATETIME NULL DEFAULT NULL,
@@ -270,9 +292,10 @@ CREATE TABLE IF NOT EXISTS `DELIVERY` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='배송';
 
 
+
 -- [DELIVERY_STATUS_HISTORY] 배송 상태 변경 이력
 -- - 배송은 상태 변경이 많아서 “변경 로그”가 필요함
--- - DELIVERY.status 업데이트 시 트리거로 자동 insert
+-- - DELIVERY.status 변경 시 서버에서 이 테이블에 insert하는 규칙(트리거 X)
 CREATE TABLE IF NOT EXISTS `DELIVERY_STATUS_HISTORY` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `delivery_id` BIGINT UNSIGNED NOT NULL,
@@ -284,6 +307,7 @@ CREATE TABLE IF NOT EXISTS `DELIVERY_STATUS_HISTORY` (
   `changed_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '상태 변경 시각',
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='배송 상태 이력';
+
 
 
 -- [DELIVERY_GROUP] 배달 루트 그룹(기사 1명 + 날짜 기준)
@@ -304,6 +328,7 @@ CREATE TABLE IF NOT EXISTS `DELIVERY_GROUP` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='배달 루트 그룹';
 
 
+
 -- [DELIVERY_GROUP_ITEM] 루트에 들어가는 배송 목록 + 순서
 -- - group_id(루트) 안에 delivery_id(배송)를 넣고 seq로 순서 관리
 CREATE TABLE IF NOT EXISTS `DELIVERY_GROUP_ITEM` (
@@ -313,6 +338,7 @@ CREATE TABLE IF NOT EXISTS `DELIVERY_GROUP_ITEM` (
   `seq` INT NOT NULL DEFAULT 1 COMMENT '그룹 내 순서',
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='루트 그룹 항목';
+
 
 
 -- [DELIVERY_PHOTO] 배송 사진(증빙)
@@ -332,9 +358,10 @@ CREATE TABLE IF NOT EXISTS `DELIVERY_PHOTO` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='배송 사진';
 
 
+
 -- [PROD_LOG] 생산/출고/조정 로그(재고 변동 원장)
--- - MAKE/OUT/ADJ+/ADJ- 같은 이벤트를 쌓는 테이블
--- - 입력되면 트리거로 STOCK.qty 자동 반영(현재 재고 유지하려고)
+-- - MAKE/OUT/ADJ+/ADJ- 같은 이벤트를 쌓는 테이블(재고 변동의 원본 데이터)
+-- - STOCK.qty(현재 재고)는 서버에서 PROD_LOG 등록/수정/삭제 시 같이 반영하는 규칙으로 관리(트리거 X)
 CREATE TABLE IF NOT EXISTS `PROD_LOG` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `product_id` BIGINT UNSIGNED NOT NULL,
@@ -350,10 +377,12 @@ CREATE TABLE IF NOT EXISTS `PROD_LOG` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='생산/출고 로그';
 
 
+
 -- [ISSUE] 이슈 테이블
 -- - 기계/품질/안전/배송 등 현장에서 발생한 이슈 기록
--- - prod_log_id, delivery_id는 상황에 따라 NULL 가능
--- - admin_notice는 “알림 생성했는지” 체크하는 플래그(중복 방지용)
+-- - prod_log_id, delivery_id는 상황에 따라 NULL 가능(그냥 “관련 있으면 연결”하는 느낌)
+-- - admin_notice는 “알림 생성했는지” 체크 플래그(중복 방지용)
+-- - 알림 생성은 DB가 자동으로 안 하고, 서버에서 이슈 등록/상태변경 시 필요하면 생성하는 방식
 CREATE TABLE IF NOT EXISTS `ISSUE` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `user_id` BIGINT UNSIGNED NOT NULL COMMENT 'role=EMP/DRIVER 등록자 ID',
@@ -373,9 +402,11 @@ CREATE TABLE IF NOT EXISTS `ISSUE` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='이슈';
 
 
+
 -- [NOTIFICATION] 알림 마스터(알림 1건)
 -- - ref_id는 “무슨 데이터 때문에 알림이 생겼는지” 연결하는 용도
--- - 여기서는 ISSUE.id를 ref_id로 쓰는 컨셉(필요하면 type별로 확장 가능)
+-- - 현재는 ISSUE.id를 ref_id로 쓰는 컨셉(필요하면 다른 타입도 확장 가능)
+-- - 알림 생성 자체는 서버에서 처리(예: 이슈 등록/상태변경 시 관리자 알림 생성)
 CREATE TABLE IF NOT EXISTS `NOTIFICATION` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `type` VARCHAR(20) NOT NULL COMMENT 'MACHINE / QUALITY / SAFETY / DELIVERY / ETC',
@@ -389,9 +420,11 @@ CREATE TABLE IF NOT EXISTS `NOTIFICATION` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='알림';
 
 
+
 -- [NOTIFICATION_USER] 사용자별 알림 상태
 -- - 알림을 “누가 받았는지 / 읽었는지 / 숨겼는지” 저장
 -- - 관리자 알림이면 ADMIN 계정들한테 여기로 뿌리면 됨
+-- - 중복으로 뿌리는 건 유니크/서버 규칙으로 막는 방식(트리거 X)
 CREATE TABLE IF NOT EXISTS `NOTIFICATION_USER` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
   `notification_id` BIGINT UNSIGNED NOT NULL,
@@ -403,6 +436,3 @@ CREATE TABLE IF NOT EXISTS `NOTIFICATION_USER` (
   `is_deleted` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '0: 사용, 1: 삭제(숨김)',
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='사용자별 알림 상태';
-
-
-
