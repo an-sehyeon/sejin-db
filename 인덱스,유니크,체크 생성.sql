@@ -2,6 +2,14 @@
 -- - CHECK는 MySQL 8에서 동작(버전 낮으면 무시될 수 있음)
 -- - 소프트 삭제( is_deleted ) 쓰는 테이블은 조회 조건에 자주 들어가서 인덱스가 꽤 도움이 됨
 
+-- DB 생성: sejin이라는 데이터베이스(스키마)가 없으면 새로 만들어주는 구문
+-- - IF NOT EXISTS: 이미 sejin DB가 있으면 에러 없이 그냥 넘어감(중복 생성 방지)
+-- - DEFAULT CHARSET=utf8mb4: 한글/이모지까지 안전하게 저장하려고 기본 문자셋을 utf8mb4로 설정
+CREATE DATABASE IF NOT EXISTS sejin DEFAULT CHARSET=utf8mb4;
+
+-- DB 선택: 지금부터 실행하는 테이블 생성/인덱스 생성 쿼리를 sejin DB에 적용하겠다는 뜻
+-- - 이걸 안 하면 "No database selected" 에러가 뜸
+USE sejin;
 
 -- [USER] 사용자
 -- - email은 중복 가입 방지(탈퇴해도 같은 email 재가입 막는 정책이면 그대로 유지)
