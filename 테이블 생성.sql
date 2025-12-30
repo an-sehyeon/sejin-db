@@ -2,8 +2,16 @@
 -- - 포인트 : FK는 안 걸고(삭제/운영 복잡도 줄이려고), 필요한 건 인덱스/유니크/체크 + 서버 규칙으로 보완하는 방식
 -- - 트리거는 안 씀(상태이력/재고반영/알림생성 같은 건 서버 서비스(@Transactional)에서 처리)
 
-SET NAMES utf8mb4;
-SET time_zone = '+09:00';
+-- DB 생성: sejin이라는 데이터베이스(스키마)가 없으면 새로 만들어주는 구문
+-- - IF NOT EXISTS: 이미 sejin DB가 있으면 에러 없이 그냥 넘어감(중복 생성 방지)
+-- - DEFAULT CHARSET=utf8mb4: 한글/이모지까지 안전하게 저장하려고 기본 문자셋을 utf8mb4로 설정
+CREATE DATABASE IF NOT EXISTS sejin DEFAULT CHARSET=utf8mb4;
+
+-- DB 선택: 지금부터 실행하는 테이블 생성/인덱스 생성 쿼리를 sejin DB에 적용하겠다는 뜻
+-- - 이걸 안 하면 "No database selected" 에러가 뜸
+USE sejin;
+
+-- SET time_zone = '+09:00';
 
 
 -- [TABLE 생성]
