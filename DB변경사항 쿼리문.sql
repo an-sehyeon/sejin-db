@@ -23,4 +23,15 @@ ADD COLUMN reprocessed_by BIGINT UNSIGNED NULL DEFAULT NULL COMMENT '재처리 �
 ADD COLUMN reprocessed_at DATETIME NULL DEFAULT NULL COMMENT '재처리 완료 시각' AFTER reprocessed_by,
 ADD COLUMN reprocess_err_msg VARCHAR(255) NULL DEFAULT NULL COMMENT '재처리 실패 사유' AFTER reprocessed_at;
 
-show columns from nh_row;
+
+-- [NH_ROW] 파싱 결과 행 조회 성능 개선
+-- 특정 파일(nh_file_id)에서 상태(parse_status=SUCCESS/ERROR)별 행을 빠르게 조회하기 위한 인덱스
+CREATE INDEX `idx_nh_row_file_parse_status`
+ON `NH_ROW` (`nh_file_id`, `parse_status`);
+
+
+-- [NH_ROW] 재처리 대기(저장된 오류행) 집계/조회 성능 개선
+-- 특정 파일(nh_file_id)에서 correction_status=NONE/SAVED/REPROCESSED 조건을 빠르게 필터/카운트하기 위한 인덱스
+-- (재처리 버튼 우측 상단 뱃지용 pending count 계산에 사용)
+CREATE INDEX `idx_nh_row_file_correction_status`
+ON `NH_ROW` (`nh_file_id`, `correction_status`);
